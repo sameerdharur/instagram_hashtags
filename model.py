@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch.nn.init as init
 import torchvision.models as models
 import pickle
+import random
 from torch.nn.utils.rnn import pack_padded_sequence
 
 import config
@@ -17,28 +18,36 @@ class Net(nn.Module):
 
     def __init__(self, embedding_tokens_c, embedding_tokens_h):
         super(Net, self).__init__()
-        question_features = 1024
+        hidden_size = 512
         vision_features = config.output_features
         glimpses = 2
+        dec_emb_size = 256
+        question_features = dec_emb_size
 
         with open(config.hashtags_vocabulary_path, 'rb') as fd:
             hash_vocab_json = pickle.load(fd)
 
+
+        self.output_size = len(hash_vocab_json)
         self.cnn = models.resnet50(pretrained=True)
 
         def save_output(module, input, output):
             self.buffer = output
+
         self.cnn.layer4.register_forward_hook(save_output)
+        self.linear = nn.Linear(self.cnn.fc.in_features, dec_emb_size)
+        self.bn = nn.BatchNorm1d(dec_emb_size, momentum=0.01)
+        #MAybe remove avgpool
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         self.text = TextProcessor(
             embedding_tokens=embedding_tokens_c,
             embedding_features=300,
-            lstm_features=question_features,
+            lstm_features=hidden_size,
             drop=0.5,
         )
-        print(vision_features)
-        print(glimpses)
-        print(question_features)
+        # print(vision_features)
+        # print(glimpses)
         self.attention = Attention(
             v_features=vision_features,
             q_features=question_features,
@@ -49,13 +58,13 @@ class Net(nn.Module):
         self.classifier = Classifier(
             in_features=glimpses * vision_features + question_features,
             mid_features=1024,
-            out_features=len(hash_vocab_json),
+            out_features=self.output_size,
             drop=0.5,
         )
-        self.hash = DecoderRNN(
-                enc_hidden_size = glimpses * vision_features + question_features,
-                dec_hidden_size = 256,
-                output_size = len(hash_vocab_json)
+        self.hash = DecoderRNN_IMGFeat(
+                embed_size = dec_emb_size,
+                hidden_size = hidden_size,
+                output_size = self.output_size
             )
         # self.hash = HashtagProcessor(
         #     embedding_tokens=embedding_tokens,
@@ -71,25 +80,45 @@ class Net(nn.Module):
                 if m.bias is not None:
                     m.bias.data.zero_()
 
-    def forward(self, img, q, q_len, hashtag, a_len):
+    def forward(self, img, q, q_len, hashtag, a_len, teacher_forcing_ratio = 0.5):
         self.cnn(img)
         v = self.buffer
-        print(v.shape)
-        sdfklg
-        q = self.text(q, list(q_len.data))
-        print(q.shape)
-        v = v / (v.norm(p=2, dim=1, keepdim=True).expand_as(v) + 1e-8)
-        a = self.attention(v, q)
-        v = apply_attention(v, a)
+        v = self.avgpool(v)
+        # print(a_len)
+        # lkjsdgfd
+        features = v.reshape(v.size(0), -1)
+        features = self.bn(self.linear(features))
+        q = q.permute(1,0)
+        hashtag = hashtag.permute(1,0)
+        h,c = self.text(q, list(q_len.data))
+        # print(q.shape)
+        # v = v / (v.norm(p=2, dim=1, keepdim=True).expand_as(v) + 1e-8)
+        # a = self.attention(v, q)
+        # v = apply_attention(v, a)
 
-        combined = torch.cat([v, q], dim=1)
+        # combined = torch.cat([v, q], dim=1)
         # print(combined.shape)
         # ksljdfksd
         # answer = self.classifier(combined)
         #Don't pass combine as the input here
         #Use the actual features and caclulate attention based on those features
-        predictions, hidden = self.hash(hashtag,combined)
-        return predictions
+        # print(hashtag.shape)
+        trg_len = hashtag.shape[1]
+        batch_size = hashtag.shape[0]
+        trg_vocab_size = self.output_size
+        outputs = torch.zeros(trg_len, batch_size, trg_vocab_size)
+
+        input = hashtag[0,:]
+
+        for t in range(1,trg_len):
+            prediction, (h, c) = self.hash(features, input, h, c)
+            # print(outputs.shape)
+            # print(prediction.shape)
+            outputs[:,t] = prediction
+            teacher_force = random.random() < teacher_forcing_ratio
+            top1 = prediction.argmax(1)
+            input = hashtag[t] if teacher_force else top1
+        return outputs
 
 class DecoderRNN(nn.Module):
     def __init__(self, enc_hidden_size, dec_hidden_size, output_size):
@@ -105,13 +134,13 @@ class DecoderRNN(nn.Module):
         # print(input)
         # input = input.to(torch.int64)
         # print(self.embedding.weight)
-        print(input.shape)
+        # print(input.shape)
         output = self.embedding(input)
-        print(output.shape)
+        # print(output.shape)
         # output = output.view(1, 1, -1)
         output = F.relu(output)
-        print(output.shape)
-        print(hidden.shape)
+        # print(output.shape)
+        # print(hidden.shape)
         output, hidden = self.gru(output, hidden)
         prediction = self.out(output[0])
         return prediction, hidden
@@ -120,38 +149,47 @@ class DecoderRNN(nn.Module):
     #     return torch.zeros(1, 1, self.hidden_size, device=device)
 
 class DecoderRNN_IMGFeat(nn.Module):
-    def __init__(self, embed_size, hidden_size, output_size, num_layers, max_seq_length=20):
+    def __init__(self, embed_size, hidden_size, output_size, num_layers= 1, max_seq_length=20):
         """Set the hyper-parameters and build the layers."""
-        super(DecoderRNN, self).__init__()
+        super(DecoderRNN_IMGFeat, self).__init__()
         self.embed = nn.Embedding(output_size, embed_size)
-        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
+        self.lstm = nn.LSTM(2*embed_size, hidden_size, num_layers)
         self.linear = nn.Linear(hidden_size, output_size)
         self.max_seg_length = max_seq_length
         
-    def forward(self, features, captions, lengths, h,c):
+    def forward(self, features, captions, h, c):
         """Decode image feature vectors and generates captions."""
+        captions = captions.unsqueeze(0)
         embeddings = self.embed(captions)
-        embeddings = torch.cat((features.unsqueeze(1), embeddings), 1)
-        packed = pack_padded_sequence(embeddings, lengths, batch_first=True) 
-        hiddens, _ = self.lstm(packed)
-        outputs = self.linear(hiddens[0])
-        return outputs
+        # print(features.unsqueeze(1).shape)
+        embeddings = torch.cat((features.unsqueeze(0), embeddings), 2)
+        # print(embeddings.shape)
+        # packed = pack_padded_sequence(embeddings, lengths, batch_first=True)
+        # print(h.shape)
+        # print(c.shape)
 
-    def forward(self, features, captions, lengths, h,c):
-        """Decode image feature vectors and generates captions."""
-        embeddings = self.embed(captions)
-        embeddings = torch.cat((features.unsqueeze(1), embeddings), 1)
+        # print(h.permute(1,0,2)[0].shape)
+        # sdsdf
         
-        preds = torch.zeros(batch_size, max_timespan, self.vocabulary_size).cuda()
+        output, (h1,c1) = self.lstm(embeddings, (h,c))
+        outputs = self.linear(output.squeeze(0))
+        return outputs, (h1,c1)
+
+    # def forward(self, features, captions, lengths, h,c):
+    #     """Decode image feature vectors and generates captions."""
+    #     embeddings = self.embed(captions)
+    #     embeddings = torch.cat((features.unsqueeze(1), embeddings), 1)
         
-        for t in range(max_timespan):
-            h, c = self.lstm(lstm_input, (h, c))
-            output = self.linear(self.dropout(h))
-            
-        packed = pack_padded_sequence(embeddings, lengths, batch_first=True) 
-        hiddens, _ = self.lstm(packed)
-        outputs = self.linear(hiddens[0])
-        return outputs
+    #     preds = torch.zeros(batch_size, max_timespan, self.vocabulary_size).cuda()
+        
+    #     for t in range(max_timespan):
+    #         h, c = self.lstm(lstm_input, (h, c))
+    #         output = self.linear(self.dropout(h))
+
+    #     packed = pack_padded_sequence(embeddings, lengths, batch_first=True) 
+    #     hiddens, _ = self.lstm(packed)
+    #     outputs = self.linear(hiddens[0])
+    #     return outputs
     
     def sample(self, features, states=None):
         """Generate captions for given image features using greedy search."""
@@ -232,12 +270,12 @@ class TextProcessor(nn.Module):
             init.xavier_uniform_(w)
 
     def forward(self, q, q_len):
-        print(type(q))
+        # print(type(q))
         embedded = self.embedding(q)
         tanhed = self.tanh(self.drop(embedded))
-        packed = pack_padded_sequence(tanhed, q_len, batch_first=True, enforce_sorted = False)
-        _, (_, c) = self.lstm(packed)
-        return c.squeeze(0)
+        # packed = pack_padded_sequence(tanhed, q_len, batch_first=True, enforce_sorted = False)
+        outputs, (h, c) = self.lstm(tanhed)
+        return h,c
 
 
 class Attention(nn.Module):
