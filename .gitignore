@@ -1,6 +1,7 @@
 __pycache__
 *.pyc
 vqa
+logs
 
 # Ignore pickles
 *.pkl

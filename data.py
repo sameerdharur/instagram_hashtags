@@ -14,14 +14,15 @@ import utils
 import pickle
 
 
-def get_loader(train=False, val=False, test=False):
+def get_loader(image_path, train=False, val=False, test=False):
     """ Returns a data loader for the desired split """
     assert train + val + test == 1, 'need to set exactly one of {train, val, test} to True'
     split = VQA(
         utils.path_for(train=train, val=val, test=test, question=True),
         utils.path_for(train=train, val=val, test=test, answer=True),
-        config.preprocessed_path,
-        answerable_only=train,
+        image_path,
+        answerable_only = train,
+        transform = utils.get_transform(config.image_size, config.central_fraction)
     )
     loader = torch.utils.data.DataLoader(
         split,
@@ -42,15 +43,15 @@ def collate_fn(batch):
 
 class VQA(data.Dataset):
     """ VQA dataset, open-ended """
-    def __init__(self, questions_path, answers_path, image_features_path, answerable_only=False):
+    def __init__(self, questions_path, answers_path, image_path, answerable_only=False, transform=None):
         super(VQA, self).__init__()
-        print(questions_path)
+        # print(questions_path)
         with open(questions_path, 'r') as fd:
             questions_json = json.load(fd)
-        print(questions_json)
+        # print(questions_json)
         with open(answers_path, 'r') as fd:
             answers_json = json.load(fd)
-        print(config.captions_vocabulary_path)
+        # print(config.captions_vocabulary_path)
         with open(config.captions_vocabulary_path, 'rb') as fd:
             cap_vocab_json = pickle.load(fd)
         with open(config.hashtags_vocabulary_path, 'rb') as fd:
@@ -68,25 +69,39 @@ class VQA(data.Dataset):
         self.questions = [self._encode_question(q) for q in self.questions]
         self.answers = [self._encode_answers(a) for a in self.answers]
 
+        #v
+        self.path = image_path
+        self.id_to_filename = self._find_images()
+        self.sorted_ids = sorted(self.id_to_filename.keys())  # used for deterministic iteration order
+        # print('found {} images in {}'.format(len(self), self.path))
+        self.transform = transform
+
         # v
-        self.image_features_path = image_features_path
-        self.coco_id_to_index = self._create_coco_id_to_index()
-        self.coco_ids = [q['image_id'] for q in questions_json['questions']]
+        # self.image_features_path = image_features_path
+        # self.coco_id_to_index = self._create_coco_id_to_index()
+        # self.coco_ids = [q['image_id'] for q in questions_json['questions']]
+        self.coco_ids = [key for key in questions_json.keys()]
 
         # only use questions that have at least one answer?
         self.answerable_only = answerable_only
-        if self.answerable_only:
-            self.answerable = self._find_answerable()
+        # if self.answerable_only:
+        #     self.answerable = self._find_answerable()
 
     @property
     def max_question_length(self):
-        if not hasattr(self, '_max_length'):
-            self._max_length = max(map(len, self.questions))
-        return self._max_length
+        if not hasattr(self, '_max_length_questions'):
+            self._max_length_questions = max(map(len, self.questions))
+        return self._max_length_questions
+    
+    @property
+    def max_answer_length(self):
+        if not hasattr(self, '_max_length_answers'):
+            self._max_length_answers = max(map(len, self.answers))
+        return self._max_length_answers
 
     @property
     def num_tokens(self):
-        return len(self.token_to_index) + 1  # add 1 for <unknown> token at index 0
+        return len(self.token_to_index),len(self.answer_to_index)  # add 1 for <unknown> token at index 0
 
     def _create_coco_id_to_index(self):
         """ Create a mapping from a COCO image id into the corresponding index into the h5 file """
@@ -120,10 +135,12 @@ class VQA(data.Dataset):
 
     def _encode_question(self, question):
         """ Turn a question into a vector of indices and a question length """
-        vec = torch.zeros(self.max_question_length).long()
+        vec = torch.zeros(self.max_question_length + 2).long()
+        vec[0] = self.token_to_index['<sos>']
         for i, token in enumerate(question):
             index = self.token_to_index.get(token, 0)
-            vec[i] = index
+            vec[i+1] = index
+        vec[i+2] = self.token_to_index['<eos>']
         return vec, len(question)
 
     def _encode_answers(self, answers):
@@ -131,12 +148,18 @@ class VQA(data.Dataset):
         # answer vec will be a vector of answer counts to determine which answers will contribute to the loss.
         # this should be multiplied with 0.1 * negative log-likelihoods that a model produces and then summed up
         # to get the loss that is weighted by how many humans gave that answer
-        answer_vec = torch.zeros(len(self.answer_to_index))
-        for answer in answers:
-            index = self.answer_to_index.get(answer)
-            if index is not None:
-                answer_vec[index] += 1
-        return answer_vec
+        answer_vec = torch.zeros(self.max_answer_length+2).long()
+        answer_vec[0] = self.answer_to_index['<sos>']
+        for i, token in enumerate(answers):
+            index = self.answer_to_index.get(token, 0)
+            answer_vec[i+1] = index
+        answer_vec[i+2] = self.answer_to_index['<eos>']
+        return answer_vec, len(answers)
+        # for answer in answers:
+        #     index = self.answer_to_index.get(answer)
+        #     if index is not None:
+        #         answer_vec[index] += 1
+        # return answer_vec
 
     def _load_image(self, image_id):
         """ Load an image """
@@ -150,23 +173,60 @@ class VQA(data.Dataset):
         img = dataset[index].astype('float32')
         return torch.from_numpy(img)
 
+    def _find_images(self):
+        id_to_filename = {}
+        for filename in os.listdir(self.path):
+            if not filename.endswith('.jpg'):
+                continue
+            # print(filename)
+            # id_and_extension = filename.split('_')[-1]
+            # print(id_and_extension)
+            id = filename.split('.')[0]
+            id_to_filename[id] = filename
+        return id_to_filename
+
     def __getitem__(self, item):
-        if self.answerable_only:
-            # change of indices to only address answerable questions
-            item = self.answerable[item]
+        # if self.answerable_only:
+        #     # change of indices to only address answerable questions
+        #     item = self.answerable[item]
 
         q, q_length = self.questions[item]
-        a = self.answers[item]
+        a,a_length = self.answers[item]
+        # print(q)
+        inv_map = {v: k for k, v in self.token_to_index.items()}
+        inv_map_ans = {v: k for k, v in self.answer_to_index.items()}
+        # print(self.token_to_index)
+        # print(inv_map)
+        q_tr = []
+        a_tr = []
+        # for w in q:
+        #     if w == 0:
+        #         break
+        #     q_tr.append(inv_map[w.item()])
+        # print(a)
+        # for i,w in enumerate(a):
+        #     if w == 1:
+        #         a_tr.append(inv_map_ans[i])
+        # print(q_tr)
+        # print(a_tr)
         image_id = self.coco_ids[item]
-        v = self._load_image(image_id)
+        # v = self._load_image(image_id)
+        # id = self.sorted_ids[image_id]
+        path = os.path.join(self.path, image_id)
+        # print(path)
+        # klajfd
+        img = Image.open(path).convert('RGB')
+
+        if self.transform is not None:
+            img = self.transform(img)
         # since batches are re-ordered for PackedSequence's, the original question order is lost
         # we return `item` so that the order of (v, q, a) triples can be restored if desired
         # without shuffling in the dataloader, these will be in the order that they appear in the q and a json's.
-        return v, q, a, item, q_length
+        return img, q, a, item, q_length, a_length
 
     def __len__(self):
         if self.answerable_only:
-            return len(self.answerable)
+            return len(self.answers)
         else:
             return len(self.questions)
 

@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.utils.data
 import torchvision.models as models
+import numpy as np
 from tqdm import tqdm
 
 import config
@@ -56,18 +57,20 @@ def main():
     )
 
     with h5py.File(config.preprocessed_path, libver='latest') as fd:
-        features = fd.create_dataset('features', shape=features_shape, dtype='float16')
-        coco_ids = fd.create_dataset('ids', shape=(len(loader.dataset),), dtype='int32')
-
+        # features = fd.create_dataset('features', shape=features_shape, dtype='float16')
+        # coco_ids = fd.create_dataset('ids', shape=(len(loader.dataset),), dtype='int32')
+        features = np.zeros(features_shape)
+        img_ids = []
         i = j = 0
         for ids, imgs in tqdm(loader):
             # imgs = Variable(imgs.cuda(async=True), volatile=True)
+            # print(imgs.size())
             imgs = imgs.to(device)
             out = net(imgs)
 
             j = i + imgs.size(0)
             features[i:j, :, :] = out.data.cpu().numpy().astype('float16')
-            coco_ids[i:j] = ids.numpy().astype('int32')
+            img_ids.extend(ids)
             i = j
 
 

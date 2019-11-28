@@ -41,8 +41,8 @@ def run(net, loader, optimizer, tracker, train=False, prefix='', epoch=0):
     loss_tracker = tracker.track('{}_loss'.format(prefix), tracker_class(**tracker_params))
     acc_tracker = tracker.track('{}_acc'.format(prefix), tracker_class(**tracker_params))
 
-    log_softmax = nn.LogSoftmax().cuda()
-    for v, q, a, idx, q_len in tq:
+    log_softmax = nn.LogSoftmax(dim = 1).cuda()
+    for v, q, a, idx, q_len, a_len in tq:
         var_params = {
             'volatile': not train,
             'requires_grad': False,
@@ -56,7 +56,8 @@ def run(net, loader, optimizer, tracker, train=False, prefix='', epoch=0):
         # q_len = Variable(q_len.cuda(async=True), **var_params)
         q_len = q_len.to(device)
 
-        out = net(v, q, q_len)
+        out = net(v, q, q_len, a, a_len)
+        print(out.shape)
         nll = -log_softmax(out)
         loss = (nll * a / 10).sum(dim=1).mean()
         acc = utils.batch_accuracy(out.data, a.data).cpu()
@@ -77,7 +78,7 @@ def run(net, loader, optimizer, tracker, train=False, prefix='', epoch=0):
             accs.append(acc.view(-1))
             idxs.append(idx.view(-1).clone())
 
-        loss_tracker.append(loss.data[0])
+        loss_tracker.append(loss.item())
         # acc_tracker.append(acc.mean())
         for a in acc:
             acc_tracker.append(a.item())
@@ -102,30 +103,38 @@ def main():
 
     cudnn.benchmark = True
 
-    train_loader = data.get_loader(train=True)
-    val_loader = data.get_loader(val=True)
+    train_loader = data.get_loader(config.train_path, train=True)
+    val_loader = data.get_loader(config.val_path, val=True)
 
-    net = nn.DataParallel(model.Net(train_loader.dataset.num_tokens)).cuda()
+    net = nn.DataParallel(model.Net(train_loader.dataset.num_tokens[0],train_loader.dataset.num_tokens[1]).to(device))    
     optimizer = optim.Adam([p for p in net.parameters() if p.requires_grad])
 
     tracker = utils.Tracker()
-    config_as_dict = {k: v for k, v in vars(config).items() if not k.startswith('__')}
+    # for k,v in vars(config).items():
+    #     print(k)
+    # sdfsd
+    #BRING THIS BACK
+    # criterion = nn.CrossEntropyLoss(ignore_index = PAD_IDX)
+    criterion = nn.CrossEntropyLoss(ignore_index = train_loader.dataset.answer_to_index['<pad>'])
+    config_as_dict = {k: v for k, v in vars(config).items() if not k.startswith('__') and not k.startswith('os') and not k.startswith('expanduser') and not k.startswith('platform')}
+
 
     for i in range(config.epochs):
         _ = run(net, train_loader, optimizer, tracker, train=True, prefix='train', epoch=i)
         r = run(net, val_loader, optimizer, tracker, train=False, prefix='val', epoch=i)
-
+        # print(train_loader.dataset.token_to_index)
         results = {
             'name': name,
             'tracker': tracker.to_dict(),
             'config': config_as_dict,
-            'weights': net.state_dict(),
+            'weights': net.module.state_dict(),
             'eval': {
                 'answers': r[0],
                 'accuracies': r[1],
                 'idx': r[2],
             },
-            'vocab': train_loader.dataset.vocab,
+            'cap_vocab': train_loader.dataset.token_to_index,
+            'hash_vocab': train_loader.dataset.answer_to_index
         }
         torch.save(results, target_name)
 
