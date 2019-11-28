@@ -74,8 +74,10 @@ class Net(nn.Module):
     def forward(self, img, q, q_len, hashtag, a_len):
         self.cnn(img)
         v = self.buffer
+        print(v.shape)
+        sdfklg
         q = self.text(q, list(q_len.data))
-
+        print(q.shape)
         v = v / (v.norm(p=2, dim=1, keepdim=True).expand_as(v) + 1e-8)
         a = self.attention(v, q)
         v = apply_attention(v, a)
@@ -84,6 +86,8 @@ class Net(nn.Module):
         # print(combined.shape)
         # ksljdfksd
         # answer = self.classifier(combined)
+        #Don't pass combine as the input here
+        #Use the actual features and caclulate attention based on those features
         predictions, hidden = self.hash(hashtag,combined)
         return predictions
 
@@ -93,7 +97,7 @@ class DecoderRNN(nn.Module):
         # self.enchidden_size = hidden_size
 
         self.embedding = nn.Embedding(output_size, dec_hidden_size, padding_idx=0)
-        self.gru = nn.GRU(dec_hidden_size*16*56, enc_hidden_size)
+        self.gru = nn.GRU(dec_hidden_size, enc_hidden_size)
         self.out = nn.Linear(enc_hidden_size, output_size)
         # self.softmax = nn.LogSoftmax(dim=1)
 
@@ -104,7 +108,7 @@ class DecoderRNN(nn.Module):
         print(input.shape)
         output = self.embedding(input)
         print(output.shape)
-        output = output.view(1, 1, -1)
+        # output = output.view(1, 1, -1)
         output = F.relu(output)
         print(output.shape)
         print(hidden.shape)
@@ -114,6 +118,56 @@ class DecoderRNN(nn.Module):
 
     # def initHidden(self):
     #     return torch.zeros(1, 1, self.hidden_size, device=device)
+
+class DecoderRNN_IMGFeat(nn.Module):
+    def __init__(self, embed_size, hidden_size, output_size, num_layers, max_seq_length=20):
+        """Set the hyper-parameters and build the layers."""
+        super(DecoderRNN, self).__init__()
+        self.embed = nn.Embedding(output_size, embed_size)
+        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
+        self.linear = nn.Linear(hidden_size, output_size)
+        self.max_seg_length = max_seq_length
+        
+    def forward(self, features, captions, lengths, h,c):
+        """Decode image feature vectors and generates captions."""
+        embeddings = self.embed(captions)
+        embeddings = torch.cat((features.unsqueeze(1), embeddings), 1)
+        packed = pack_padded_sequence(embeddings, lengths, batch_first=True) 
+        hiddens, _ = self.lstm(packed)
+        outputs = self.linear(hiddens[0])
+        return outputs
+
+    def forward(self, features, captions, lengths, h,c):
+        """Decode image feature vectors and generates captions."""
+        embeddings = self.embed(captions)
+        embeddings = torch.cat((features.unsqueeze(1), embeddings), 1)
+        
+        preds = torch.zeros(batch_size, max_timespan, self.vocabulary_size).cuda()
+        
+        for t in range(max_timespan):
+            h, c = self.lstm(lstm_input, (h, c))
+            output = self.linear(self.dropout(h))
+            
+        packed = pack_padded_sequence(embeddings, lengths, batch_first=True) 
+        hiddens, _ = self.lstm(packed)
+        outputs = self.linear(hiddens[0])
+        return outputs
+    
+    def sample(self, features, states=None):
+        """Generate captions for given image features using greedy search."""
+        sampled_ids = []
+        inputs = features.unsqueeze(1)
+        for i in range(self.max_seg_length):
+            hiddens, states = self.lstm(inputs, states)          # hiddens: (batch_size, 1, hidden_size)
+            outputs = self.linear(hiddens.squeeze(1))            # outputs:  (batch_size, vocab_size)
+            _, predicted = outputs.max(1)                        # predicted: (batch_size)
+            sampled_ids.append(predicted)
+            inputs = self.embed(predicted)                       # inputs: (batch_size, embed_size)
+            inputs = inputs.unsqueeze(1)                         # inputs: (batch_size, 1, embed_size)
+        sampled_ids = torch.stack(sampled_ids, 1)                # sampled_ids: (batch_size, max_seq_length)
+        return sampled_ids
+
+
 
 class Classifier(nn.Sequential):
     def __init__(self, in_features, mid_features, out_features, drop=0.0):
