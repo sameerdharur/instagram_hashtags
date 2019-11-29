@@ -109,6 +109,7 @@ class Net(nn.Module):
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size)
 
         input = hashtag[0,:]
+        
 
         for t in range(1,trg_len):
             prediction, (h, c) = self.hash(features, input, h, c)
@@ -117,6 +118,9 @@ class Net(nn.Module):
             outputs[:,t] = prediction
             teacher_force = random.random() < teacher_forcing_ratio
             top1 = prediction.argmax(1)
+            if teacher_forcing_ratio == 0:
+                if top1 == hash_vocab_json['<eos>']:
+                    break
             input = hashtag[t] if teacher_force else top1
         return outputs
 
@@ -157,10 +161,10 @@ class DecoderRNN_IMGFeat(nn.Module):
         self.linear = nn.Linear(hidden_size, output_size)
         self.max_seg_length = max_seq_length
         
-    def forward(self, features, captions, h, c):
+    def forward(self, features, hashtags, h, c):
         """Decode image feature vectors and generates captions."""
-        captions = captions.unsqueeze(0)
-        embeddings = self.embed(captions)
+        hashtags = hashtags.unsqueeze(0)
+        embeddings = self.embed(hashtags)
         # print(features.unsqueeze(1).shape)
         embeddings = torch.cat((features.unsqueeze(0), embeddings), 2)
         # print(embeddings.shape)

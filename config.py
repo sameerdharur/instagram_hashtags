@@ -27,8 +27,9 @@ central_fraction = 0.875  # only take this much of the centre when scaling and c
 
 # training config
 epochs = 50
-batch_size = 16
-initial_lr = 1e-3  # default Adam lr
+batch_size = 17
+test_batch_size = 1
+initial_lr = 1e-2  # default Adam lr
 lr_halflife = 50000  # in iterations
 data_workers = 8
 max_answers = 3000

@@ -24,14 +24,24 @@ def get_loader(image_path, train=False, val=False, test=False):
         answerable_only = train,
         transform = utils.get_transform(config.image_size, config.central_fraction)
     )
-    loader = torch.utils.data.DataLoader(
-        split,
-        batch_size=config.batch_size,
-        shuffle=train,  # only shuffle the data in training
-        pin_memory=True,
-        num_workers=config.data_workers,
-        collate_fn=collate_fn,
-    )
+    if test:
+        loader = torch.utils.data.DataLoader(
+            split,
+            batch_size=config.test_batch_size,
+            shuffle=train,  # only shuffle the data in training
+            pin_memory=True,
+            num_workers=config.data_workers,
+            collate_fn=collate_fn,
+        )
+    else:   
+        loader = torch.utils.data.DataLoader(
+            split,
+            batch_size=config.batch_size,
+            shuffle=train,  # only shuffle the data in training
+            pin_memory=True,
+            num_workers=config.data_workers,
+            collate_fn=collate_fn,
+        )
     return loader
 
 
@@ -149,11 +159,15 @@ class VQA(data.Dataset):
         # this should be multiplied with 0.1 * negative log-likelihoods that a model produces and then summed up
         # to get the loss that is weighted by how many humans gave that answer
         answer_vec = torch.zeros(self.max_answer_length+2).long()
+        # print(answers)
         answer_vec[0] = self.answer_to_index['<sos>']
         for i, token in enumerate(answers):
             index = self.answer_to_index.get(token, 0)
             answer_vec[i+1] = index
-        answer_vec[i+2] = self.answer_to_index['<eos>']
+        if len(answers) == 0:
+            answer_vec[1] = self.answer_to_index['<eos>']
+        else:
+            answer_vec[i+2] = self.answer_to_index['<eos>']
         return answer_vec, len(answers)
         # for answer in answers:
         #     index = self.answer_to_index.get(answer)
