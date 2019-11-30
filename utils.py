@@ -130,8 +130,9 @@ class Tracker:
 
 def get_transform(target_size, central_fraction=1.0):
     return transforms.Compose([
-        transforms.Resize(int(target_size / central_fraction)),
-        transforms.CenterCrop(target_size),
+        # transforms.Resize(int(target_size / central_fraction)),
+        transforms.RandomResizedCrop(target_size),
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),

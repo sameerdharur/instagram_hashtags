@@ -13,8 +13,11 @@ from tqdm import tqdm
 
 import config
 import data
+from os.path import expanduser
 import model
 import nltk
+import pickle
+import numpy as np
 import utils
 
 
@@ -174,6 +177,12 @@ def main():
     else:
         from datetime import datetime
         name = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+    f1 = open(expanduser("~")  + '/Glove/glove_dict_300.pkl', 'rb') 
+
+    glove_dict = pickle.load(f1)
+
+    f1.close()
+
     target_name = os.path.join('logs', '{}.pth'.format(name))
     print('will save to {}'.format(target_name))
 
@@ -182,9 +191,37 @@ def main():
     train_loader = data.get_loader(config.train_path, train=True)
     val_loader = data.get_loader(config.val_path, val=True)
 
+    cap_vcb = train_loader.dataset.token_to_index
+    hash_vcb = train_loader.dataset.answer_to_index
+    inv_hash_dict = {v: k for k, v in hash_vcb.items()}
+    inv_cap_dict = {v: k for k, v in cap_vcb.items()}
+
+    src_matrix_len = len(cap_vcb)
+    src_weights_matrix = np.zeros((src_matrix_len, 300))
+    words_found = 0
+
+    for i, word in enumerate(inv_cap_dict):
+        try: 
+            # print(i,word)
+            src_weights_matrix[i] = glove_dict[word]
+            words_found += 1
+        except KeyError:
+            src_weights_matrix[i] = np.random.normal(scale=0.6, size=(300, ))
+
+    trg_matrix_len = len(hash_vcb)
+    trg_weights_matrix = np.zeros((trg_matrix_len, 300))
+    words_found = 0
+
+    for i, word in enumerate(inv_hash_dict):
+        try: 
+            trg_weights_matrix[i] = glove_dict[word]
+            words_found += 1
+        except KeyError:
+            trg_weights_matrix[i] = np.random.normal(scale=0.6, size=(300, ))
+
     # net = nn.DataParallel(model.Net(train_loader.dataset.num_tokens[0],train_loader.dataset.num_tokens[1]).to(device))    
-    net = model.Net(train_loader.dataset.num_tokens[0],train_loader.dataset.num_tokens[1]).to(device)  
-    optimizer = optim.Adam([p for p in net.parameters() if p.requires_grad])
+    net = model.Net(train_loader.dataset.num_tokens[0],train_loader.dataset.num_tokens[1], src_weights_matrix, trg_weights_matrix).to(device)  
+    optimizer = optim.Adam([p for p in net.parameters() if p.requires_grad], lr = config.initial_lr, weight_decay = config.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, config.epochs * len(train_loader), 0.0001)
 
     tracker = utils.Tracker()
@@ -196,11 +233,11 @@ def main():
     criterion = nn.CrossEntropyLoss(ignore_index = train_loader.dataset.answer_to_index['<pad>'])
     config_as_dict = {k: v for k, v in vars(config).items() if not k.startswith('__') and not k.startswith('os') and not k.startswith('expanduser') and not k.startswith('platform')}
 
-    cap_vcb = train_loader.dataset.token_to_index
-    hash_vcb = train_loader.dataset.answer_to_index
+    
     for i in range(config.epochs):
         # _ = run(net, train_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=True, prefix='train', epoch=i)
         # r = run(net, val_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=False, prefix='val', epoch=i)
+        #EMPTY CACHE
         run(net, train_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=True, prefix='train', epoch=i)
         run(net, val_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=False, prefix='val', epoch=i)
         # print(train_loader.dataset.token_to_index)

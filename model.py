@@ -16,12 +16,12 @@ class Net(nn.Module):
     [0]: https://arxiv.org/abs/1704.03162
     """
 
-    def __init__(self, embedding_tokens_c, embedding_tokens_h):
+    def __init__(self, embedding_tokens_c, embedding_tokens_h, src_embed = None, trg_embed = None):
         super(Net, self).__init__()
         hidden_size = 512
         vision_features = config.output_features
         glimpses = 2
-        dec_emb_size = 256
+        dec_emb_size = 300
         question_features = dec_emb_size
 
         with open(config.hashtags_vocabulary_path, 'rb') as fd:
@@ -44,7 +44,8 @@ class Net(nn.Module):
             embedding_tokens=embedding_tokens_c,
             embedding_features=300,
             lstm_features=hidden_size,
-            drop=0.5,
+            emb_weight_matrix = src_embed,
+            drop=0.5
         )
         # print(vision_features)
         # print(glimpses)
@@ -64,7 +65,8 @@ class Net(nn.Module):
         self.hash = DecoderRNN_IMGFeat(
                 embed_size = dec_emb_size,
                 hidden_size = hidden_size,
-                output_size = self.output_size
+                output_size = self.output_size,
+                emb_weight_matrix = trg_embed
             )
         # self.hash = HashtagProcessor(
         #     embedding_tokens=embedding_tokens,
@@ -109,7 +111,7 @@ class Net(nn.Module):
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size)
 
         input = hashtag[0,:]
-        
+
 
         for t in range(1,trg_len):
             prediction, (h, c) = self.hash(features, input, h, c)
@@ -153,10 +155,12 @@ class DecoderRNN(nn.Module):
     #     return torch.zeros(1, 1, self.hidden_size, device=device)
 
 class DecoderRNN_IMGFeat(nn.Module):
-    def __init__(self, embed_size, hidden_size, output_size, num_layers= 1, max_seq_length=20):
+    def __init__(self, embed_size, hidden_size, output_size, emb_weight_matrix, num_layers= 1, max_seq_length=20):
         """Set the hyper-parameters and build the layers."""
         super(DecoderRNN_IMGFeat, self).__init__()
         self.embed = nn.Embedding(output_size, embed_size)
+        if not len(emb_weight_matrix) == 0:
+            self.embed.load_state_dict({'weight':torch.tensor(emb_weight_matrix)})
         self.lstm = nn.LSTM(2*embed_size, hidden_size, num_layers)
         self.linear = nn.Linear(hidden_size, output_size)
         self.max_seg_length = max_seq_length
@@ -252,9 +256,11 @@ class HashtagProcessor(nn.Module):
         return output, hidden
 
 class TextProcessor(nn.Module):
-    def __init__(self, embedding_tokens, embedding_features, lstm_features, drop=0.0):
+    def __init__(self, embedding_tokens, embedding_features, lstm_features, emb_weight_matrix, drop=0.0):
         super(TextProcessor, self).__init__()
         self.embedding = nn.Embedding(embedding_tokens, embedding_features, padding_idx=0)
+        if not len(emb_weight_matrix) == 0:
+            self.embedding.load_state_dict({'weight':torch.tensor(emb_weight_matrix)})
         self.drop = nn.Dropout(drop)
         self.tanh = nn.Tanh()
         self.lstm = nn.LSTM(input_size=embedding_features,
