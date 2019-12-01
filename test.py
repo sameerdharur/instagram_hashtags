@@ -13,8 +13,15 @@ from tqdm import tqdm
 import config
 import data
 import model
+import argparse
 import utils
+from torchvision.utils import save_image
+import nltk
 
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--model_path" , required= True, type = str)
+args = ap.parse_args()
 
 def update_learning_rate(optimizer, iteration):
     lr = config.initial_lr * 0.5**(float(iteration) / config.lr_halflife)
@@ -22,19 +29,56 @@ def update_learning_rate(optimizer, iteration):
         param_group['lr'] = lr
 
 def accuracy(preds, targets, k):
-    print(targets)
     batch_size = targets.size(0)
-    _, pred = preds.topk(k, 1, True, True)
-    print(pred[0][0].size())
+    _, pred = preds.topk(k, 2, True, True)
+    # print(pred[0][0].size())
+    print(pred)
+    print(pred.shape)
     correct = pred.eq(targets.view(-1, 1).expand_as(pred))
     correct_total = correct.view(-1).float().sum()
     return correct_total.item() * (100.0 / batch_size)
+
+def BLEU_score(gt_caption, sample_caption):
+    """
+    gt_caption: string, ground-truth caption
+    sample_caption: string, your model's predicted caption
+    Returns unigram BLEU score.
+    """
+    reference = [x for x in gt_caption.split(' ') 
+                 if ('<eos>' not in x and '<sos>' not in x and '<unk>' not in x and '<pad>' not in x)]
+    hypothesis = [x for x in sample_caption.split(' ') 
+                  if ('<eos>' not in x and '<sos>' not in x and '<unk>' not in x and '<pad>' not in x)]
+    BLEUscore = nltk.translate.bleu_score.sentence_bleu([reference], hypothesis, weights = [1])
+    return BLEUscore
+
+def decode_captions(captions, idx_to_word):
+    singleton = False
+    if captions.ndim == 1:
+        singleton = True
+        captions = captions[None]
+    decoded = []
+    if len(captions.shape) == 3:
+        captions = captions.squeeze(dim = 2)
+    N, T = captions.shape
+    for i in range(N):
+        words = []
+        for t in range(T):
+            word = idx_to_word[captions[i, t].item()]
+            # print(word)
+            if word != '<pad>':
+                words.append(word)
+            if word == '<eos>':
+                break
+        decoded.append(' '.join(words))
+    if singleton:
+        decoded = decoded[0]
+    return decoded
 
 
 total_iterations = 0
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def run(net, loader, optimizer, tracker, criterion, train=False, prefix='', epoch=0):
+def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix='', epoch=0):
     """ Run an epoch over the given loader """
     if train:
         net.train()
@@ -45,10 +89,12 @@ def run(net, loader, optimizer, tracker, criterion, train=False, prefix='', epoc
         answ = []
         idxs = []
         accs = []
+        blues = []
 
     tq = tqdm(loader, desc='{} E{:03d}'.format(prefix, epoch), ncols=0)
     loss_tracker = tracker.track('{}_loss'.format(prefix), tracker_class(**tracker_params))
     acc_tracker = tracker.track('{}_acc'.format(prefix), tracker_class(**tracker_params))
+    blue_tracker = tracker.track('{}_blue'.format(prefix), tracker_class(**tracker_params))
 
     # log_softmax = nn.LogSoftmax(dim = 1).cuda()
     for v, q, a, idx, q_len, a_len in tq:
@@ -64,8 +110,7 @@ def run(net, loader, optimizer, tracker, criterion, train=False, prefix='', epoc
         a = a.to(device)
         # q_len = Variable(q_len.cuda(async=True), **var_params)
         q_len = q_len.to(device)
-
-        out = net(v, q, q_len, a, a_len)
+        out = net(v, q, q_len, a, a_len, teacher_forcing_ratio = 0)
         out = out.to(device)
         # print(out.shape)
         # nll = -log_softmax(out)
@@ -78,36 +123,56 @@ def run(net, loader, optimizer, tracker, criterion, train=False, prefix='', epoc
         output = out[1:].view(-1, output_dim)
         trg = a[1:].view(-1)
         # print(a.shape)
+        # print(out.shape)
+        # print(a.shape)
         acc = accuracy(out, a, 1)
+        _, predictions = out.topk(1,2,True,True)
+        inv_hash_dict = {v: k for k, v in hash_vcb.items()}
+        inv_cap_dict = {v: k for k, v in cap_vcb.items()}
+        decoded_predictions = decode_captions(predictions, inv_hash_dict)
+        decoded_hashtags = decode_captions(a, inv_hash_dict)
+        # print(idx)
+        # print(v.squeeze().shape)
+        # save_image(v.squeeze(), 'img1.png')
+        print(decoded_predictions)
+        print(decoded_hashtags)
+        # ksldjfsjf
+        bleu_arr = []
+        for i in range(len(decoded_hashtags)):
+            bleu_arr.append(BLEU_score(decoded_hashtags[i], decoded_predictions[i]))
+        avg_blue = float(sum(bleu_arr))/len(bleu_arr)
 
         #trg = [(trg len - 1) * batch size]
         #output = [(trg len - 1) * batch size, output dim]
         
-        loss = criterion(output, trg)
+        # loss = criterion(output, trg)
 
         if train:
-            global total_iterations
-            update_learning_rate(optimizer, total_iterations)
+            # global total_iterations
+            # update_learning_rate(optimizer, total_iterations)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            # optimizer.zero_grad()
+            # loss.backward()
+            # optimizer.step()
 
             total_iterations += 1
         else:
             # store information about evaluation of this minibatch
             _, answer = out.data.cpu().max(dim=1)
             answ.append(answer.view(-1))
-            accs.append(acc.view(-1))
+            accs.append(acc)
+            blues.append(avg_blue)
             idxs.append(idx.view(-1).clone())
 
-        loss_tracker.append(loss.item())
-        # acc_tracker.append(acc)
+        # loss_tracker.append(loss.item())
+        blue_tracker.append(avg_blue)
+        acc_tracker.append(acc)
+        print(accs)
         # print(acc)
-        for a in acc:
-            acc_tracker.append(a.item())
+        # for a in acc:
+        #     acc_tracker.append(a.item())
         fmt = '{:.4f}'.format
-        tq.set_postfix(loss=fmt(loss_tracker.mean.value))
+        # tq.set_postfix(loss=fmt(loss_tracker.mean.value), blue = fmt(blue_tracker.mean.value), acc = fmt(acc_tracker.mean.value))
 
     if not train:
         answ = list(torch.cat(answ, dim=0))
@@ -130,10 +195,16 @@ def main():
 
     # train_loader = data.get_loader(config.train_path, train=True)
     test_loader = data.get_loader(config.test_path, test=True)
+    cap_vcb = test_loader.dataset.token_to_index
+    hash_vcb = test_loader.dataset.answer_to_index
+    inv_hash_dict = {v: k for k, v in hash_vcb.items()}
+    inv_cap_dict = {v: k for k, v in cap_vcb.items()}
 
-    net = nn.DataParallel(model.Net(test_loader.dataset.num_tokens[0],test_loader.dataset.num_tokens[1]).to(device))    
+    net = model.Net(test_loader.dataset.num_tokens[0],test_loader.dataset.num_tokens[1], [], []).to(device)    
     # net = model.Net(train_loader.dataset.num_tokens[0],train_loader.dataset.num_tokens[1]).to(device)  
-    optimizer = optim.Adam([p for p in net.parameters() if p.requires_grad])
+    # optimizer = optim.Adam([p for p in net.parameters() if p.requires_grad])
+    # print(torch.load('logs/' + args.model_path)['weights'])
+    net.load_state_dict(torch.load('logs/' + args.model_path)['weights'])
 
     tracker = utils.Tracker()
     # for k,v in vars(config).items():
@@ -145,24 +216,22 @@ def main():
     config_as_dict = {k: v for k, v in vars(config).items() if not k.startswith('__') and not k.startswith('os') and not k.startswith('expanduser') and not k.startswith('platform')}
 
 
-    for i in range(config.epochs):
-        _ = run(net, test_loader, optimizer, tracker, criterion, train=False, prefix='train', epoch=i)
-        # r = run(net, val_loader, optimizer, tracker, criterion, train=False, prefix='val', epoch=i)
-        # print(train_loader.dataset.token_to_index)
-        results = {
-            'name': name,
-            'tracker': tracker.to_dict(),
-            'config': config_as_dict,
-            'weights': net.module.state_dict(),
-            'eval': {
-                'answers': r[0],
-                'accuracies': r[1],
-                'idx': r[2],
-            },
-            'cap_vocab': test_loader.dataset.token_to_index,
-            'hash_vocab': test_loader.dataset.answer_to_index
-        }
-        torch.save(results, target_name)
+    r = run(net, test_loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix='test', epoch=0)
+    # r = run(net, val_loader, optimizer, tracker, criterion, train=False, prefix='val', epoch=i)
+    # print(train_loader.dataset.token_to_index)
+    # results = {
+    #     'name': name,
+    #     'tracker': tracker.to_dict(),
+    #     'config': config_as_dict,
+    #     'weights': net.module.state_dict(),
+    #     # 'eval': {
+    #     #     'answers': r[0],
+    #     #     'accuracies': r[1],
+    #     #     'idx': r[2],
+    #     # },
+    #     'cap_vocab': test_loader.dataset.token_to_index,
+    #     'hash_vocab': test_loader.dataset.answer_to_index
+    # }
 
 
 if __name__ == '__main__':

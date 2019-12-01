@@ -25,10 +25,10 @@ class Net(nn.Module):
         question_features = dec_emb_size
 
         with open(config.hashtags_vocabulary_path, 'rb') as fd:
-            hash_vocab_json = pickle.load(fd)
+            self.hash_vocab_json = pickle.load(fd)
 
 
-        self.output_size = len(hash_vocab_json)
+        self.output_size = len(self.hash_vocab_json)
         self.cnn = models.resnet50(pretrained=True)
 
         def save_output(module, input, output):
@@ -56,12 +56,12 @@ class Net(nn.Module):
             glimpses=2,
             drop=0.5,
         )
-        self.classifier = Classifier(
-            in_features=glimpses * vision_features + question_features,
-            mid_features=1024,
-            out_features=self.output_size,
-            drop=0.5,
-        )
+        # self.classifier = Classifier(
+        #     in_features=glimpses * vision_features + question_features,
+        #     mid_features=1024,
+        #     out_features=self.output_size,
+        #     drop=0.5,
+        # )
         self.hash = DecoderRNN_IMGFeat(
                 embed_size = dec_emb_size,
                 hidden_size = hidden_size,
@@ -105,24 +105,30 @@ class Net(nn.Module):
         #Don't pass combine as the input here
         #Use the actual features and caclulate attention based on those features
         # print(hashtag.shape)
-        trg_len = hashtag.shape[1]
-        batch_size = hashtag.shape[0]
+        # if teacher_forcing_ratio == 0:
+        #     hashtag = hashtag.permute(1,0)
+        trg_len = hashtag.shape[0]
+        batch_size = hashtag.shape[1]
         trg_vocab_size = self.output_size
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size)
 
         input = hashtag[0,:]
-
+        # print(input.shape)
+        # if teacher_forcing_ratio == 0:
+        #     input = hashtag[0,0]
 
         for t in range(1,trg_len):
             prediction, (h, c) = self.hash(features, input, h, c)
             # print(outputs.shape)
             # print(prediction.shape)
-            outputs[:,t] = prediction
+            outputs[t,:] = prediction
             teacher_force = random.random() < teacher_forcing_ratio
             top1 = prediction.argmax(1)
-            if teacher_forcing_ratio == 0:
-                if top1 == hash_vocab_json['<eos>']:
-                    break
+            # print(top1)
+            # if teacher_forcing_ratio == 0:
+            #     if top1 == self.hash_vocab_json['<eos>']:
+            #         break
+            # print(hashtag[t].shape)
             input = hashtag[t] if teacher_force else top1
         return outputs
 
@@ -170,6 +176,8 @@ class DecoderRNN_IMGFeat(nn.Module):
         hashtags = hashtags.unsqueeze(0)
         embeddings = self.embed(hashtags)
         # print(features.unsqueeze(1).shape)
+        # print(features.shape)
+        # print(embeddings.shape)
         embeddings = torch.cat((features.unsqueeze(0), embeddings), 2)
         # print(embeddings.shape)
         # packed = pack_padded_sequence(embeddings, lengths, batch_first=True)

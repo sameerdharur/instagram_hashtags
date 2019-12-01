@@ -14,6 +14,30 @@ import utils
 import pickle
 
 
+def decode_captions(captions, idx_to_word):
+    singleton = False
+    if captions.ndim == 1:
+        singleton = True
+        captions = captions[None]
+    decoded = []
+    if len(captions.shape) == 3:
+        captions = captions.squeeze(dim = 2)
+    N, T = captions.shape
+    for i in range(N):
+        words = []
+        for t in range(T):
+            word = idx_to_word[captions[i, t].item()]
+            # print(word)
+            if word != '<pad>':
+                words.append(word)
+            if word == '<eos>':
+                break
+        decoded.append(' '.join(words))
+    if singleton:
+        decoded = decoded[0]
+    return decoded
+
+
 def get_loader(image_path, train=False, val=False, test=False):
     """ Returns a data loader for the desired split """
     assert train + val + test == 1, 'need to set exactly one of {train, val, test} to True'
@@ -229,6 +253,8 @@ class VQA(data.Dataset):
         path = os.path.join(self.path, image_id)
         # print(path)
         # klajfd
+        # print(path)
+        # print(decode_captions(a, inv_map_ans))
         img = Image.open(path).convert('RGB')
 
         if self.transform is not None:
