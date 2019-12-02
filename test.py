@@ -32,8 +32,6 @@ def accuracy(preds, targets, k):
     batch_size = targets.size(0)
     _, pred = preds.topk(k, 2, True, True)
     # print(pred[0][0].size())
-    print(pred)
-    print(pred.shape)
     correct = pred.eq(targets.view(-1, 1).expand_as(pred))
     correct_total = correct.view(-1).float().sum()
     return correct_total.item() * (100.0 / batch_size)
@@ -134,8 +132,6 @@ def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix=
         # print(idx)
         # print(v.squeeze().shape)
         # save_image(v.squeeze(), 'img1.png')
-        print(decoded_predictions)
-        print(decoded_hashtags)
         # ksldjfsjf
         bleu_arr = []
         for i in range(len(decoded_hashtags)):
@@ -167,7 +163,6 @@ def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix=
         # loss_tracker.append(loss.item())
         blue_tracker.append(avg_blue)
         acc_tracker.append(acc)
-        print(accs)
         # print(acc)
         # for a in acc:
         #     acc_tracker.append(a.item())
