@@ -18,6 +18,8 @@ import model
 import nltk
 import pickle
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
 from torchvision.utils import save_image
 import utils
 
@@ -172,7 +174,7 @@ def run(net, loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_
         #     acc_tracker.append(a.item())
         fmt = '{:.4f}'.format
         tq.set_postfix(loss=fmt(loss_tracker.mean.value), blue = fmt(blue_tracker.mean.value))
-
+    return loss_tracker.mean.value
     # if not train:
     #     answ = list(torch.cat(answ, dim=0))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
     #     # accs = list(torch.cat(accs, dim=0))
@@ -248,14 +250,18 @@ def main():
     # criterion = nn.CrossEntropyLoss(ignore_index = PAD_IDX)
     criterion = nn.CrossEntropyLoss(ignore_index = train_loader.dataset.answer_to_index['<pad>'])
     config_as_dict = {k: v for k, v in vars(config).items() if not k.startswith('__') and not k.startswith('os') and not k.startswith('expanduser') and not k.startswith('platform')}
+    train_losses = []
+    valid_losses = []
 
     
     for i in range(config.epochs):
         # _ = run(net, train_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=True, prefix='train', epoch=i)
         # r = run(net, val_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=False, prefix='val', epoch=i)
         #EMPTY CACHE
-        run(net, train_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=True, prefix='train', epoch=i)
-        run(net, val_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=False, prefix='val', epoch=i)
+        train_loss = run(net, train_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=True, prefix='train', epoch=i)
+        valid_loss = run(net, val_loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_vcb, train=False, prefix='val', epoch=i)
+        train_losses.append(train_loss)
+        valid_losses.append(valid_loss)
         # print(train_loader.dataset.token_to_index)
         results = {
             'name': name,
@@ -272,6 +278,12 @@ def main():
             'hash_vocab': train_loader.dataset.answer_to_index
         }
         torch.save(results, target_name)
+        if i % 10 == 9:
+            plt.plot(list(range(len(valid_losses))), valid_losses, label = 'Validation')
+            plt.plot(list(range(len(train_losses))), train_losses, label = "Training")
+            # os.path.join('logs', '{}.png'.format('Valid_curve'))
+            # plt.savefig('logs' + "/Valid_curve.png")
+            plt.savefig(os.path.join('logs', '{}_Valid_curve.png'.format(name)))
 
 
 if __name__ == '__main__':
