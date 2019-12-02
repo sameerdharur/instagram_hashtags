@@ -114,6 +114,7 @@ class Net(nn.Module):
 
         input = hashtag[0,:]
         # print(input.shape)
+        # print(input.shape)
         # if teacher_forcing_ratio == 0:
         #     input = hashtag[0,0]
 

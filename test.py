@@ -16,6 +16,7 @@ import model
 import argparse
 import utils
 from torchvision.utils import save_image
+from collections import defaultdict
 import nltk
 
 
@@ -32,9 +33,24 @@ def accuracy(preds, targets, k):
     batch_size = targets.size(0)
     _, pred = preds.topk(k, 2, True, True)
     # print(pred[0][0].size())
-    correct = pred.eq(targets.view(-1, 1).expand_as(pred))
-    correct_total = correct.view(-1).float().sum()
-    return correct_total.item() * (100.0 / batch_size)
+    # targets = targets.permute(1,0)
+    pred = pred.squeeze()
+    pred = pred.permute(1,0)
+    # print(pred.shape)
+    # print(targets.shape)
+    correct = 0
+    total = 0
+    for i in range(targets.shape[0]):
+        for j in range(1,targets.shape[1]):
+            if pred[i,j] == targets[i,j]:
+                correct += 1
+            total += 1
+            if targets[i,j] == 2:
+                break
+    # correct = pred.eq(targets.view(-1, 1).expand_as(pred))
+    # correct_total = correct.view(-1).float().sum()
+    # return correct_total.item() * (100.0 / batch_size)
+    return float(correct) / total
 
 def BLEU_score(gt_caption, sample_caption):
     """
@@ -58,12 +74,14 @@ def decode_captions(captions, idx_to_word):
     if len(captions.shape) == 3:
         captions = captions.squeeze(dim = 2)
     N, T = captions.shape
+    # print(captions)
+    # print(captions.shape)
     for i in range(N):
         words = []
         for t in range(T):
             word = idx_to_word[captions[i, t].item()]
             # print(word)
-            if word != '<pad>':
+            if word != '<pad>' and word!= '<sos>':
                 words.append(word)
             if word == '<eos>':
                 break
@@ -83,7 +101,7 @@ def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix=
         tracker_class, tracker_params = tracker.MovingMeanMonitor, {'momentum': 0.99}
     else:
         net.eval()
-        tracker_class, tracker_params = tracker.MeanMonitor, {}
+        tracker_class, tracker_params = tracker.MovingMeanMonitor, {}
         answ = []
         idxs = []
         accs = []
@@ -95,6 +113,9 @@ def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix=
     blue_tracker = tracker.track('{}_blue'.format(prefix), tracker_class(**tracker_params))
 
     # log_softmax = nn.LogSoftmax(dim = 1).cuda()
+    ans_dict = defaultdict(str)
+    cap_dict = defaultdict(str)
+    pred_dict = defaultdict(str)
     for v, q, a, idx, q_len, a_len in tq:
         var_params = {
             'volatile': not train,
@@ -110,6 +131,7 @@ def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix=
         q_len = q_len.to(device)
         out = net(v, q, q_len, a, a_len, teacher_forcing_ratio = 0)
         out = out.to(device)
+        # a = a.permute(1,0)
         # print(out.shape)
         # nll = -log_softmax(out)
         # loss = (nll * a / 10).sum(dim=1).mean()
@@ -117,21 +139,42 @@ def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix=
 
 
         output_dim = out.shape[-1]
-
+        # print(a[1:])
         output = out[1:].view(-1, output_dim)
-        trg = a[1:].view(-1)
+        # trg = a[1:].view(-1)
+        # print(a[:,1:])
+        trg = a[:,1:].reshape(-1)
+        # print(a[:,1:].reshape(-1))
+        # kjsajkhsdf   
         # print(a.shape)
         # print(out.shape)
         # print(a.shape)
         acc = accuracy(out, a, 1)
         _, predictions = out.topk(1,2,True,True)
+        predictions = predictions.squeeze()
+        predictions = predictions.permute(1,0)
+        # print(predictions.shape)
+        # print(a.shape)
+        # ksljdf
         inv_hash_dict = {v: k for k, v in hash_vcb.items()}
         inv_cap_dict = {v: k for k, v in cap_vcb.items()}
         decoded_predictions = decode_captions(predictions, inv_hash_dict)
         decoded_hashtags = decode_captions(a, inv_hash_dict)
+        decoded_captions = decode_captions(q, inv_cap_dict)
+        # print(decoded_captions)
+        # ksldhf
         # print(idx)
-        # print(v.squeeze().shape)
-        # save_image(v.squeeze(), 'img1.png')
+        # print(decoded_hashtags[0])
+        for id in idx: 
+            ans_dict[id] = decoded_hashtags[id%len(decoded_hashtags)]
+        for id in idx: 
+            pred_dict[id] = decoded_predictions[id%len(decoded_predictions)]
+        for id in idx: 
+            cap_dict[id] = decoded_captions[id%len(decoded_captions)]
+        
+        for i,id in enumerate(idx):
+            # print(v[0].shape)
+            save_image(v[i], 'output/images/img_' + str(id.item()) + '.png')
         # ksldjfsjf
         bleu_arr = []
         for i in range(len(decoded_hashtags)):
@@ -142,6 +185,7 @@ def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix=
         #output = [(trg len - 1) * batch size, output dim]
         
         # loss = criterion(output, trg)
+        # print(loss)
 
         if train:
             # global total_iterations
@@ -166,14 +210,15 @@ def run(net, loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix=
         # print(acc)
         # for a in acc:
         #     acc_tracker.append(a.item())
+        # print(loss_tracker.mean.value)
         fmt = '{:.4f}'.format
-        # tq.set_postfix(loss=fmt(loss_tracker.mean.value), blue = fmt(blue_tracker.mean.value), acc = fmt(acc_tracker.mean.value))
+        tq.set_postfix(blue = fmt(blue_tracker.mean.value), acc = fmt(acc_tracker.mean.value))
 
     if not train:
-        answ = list(torch.cat(answ, dim=0))
-        accs = list(torch.cat(accs, dim=0))
-        idxs = list(torch.cat(idxs, dim=0))
-        return answ, accs, idxs
+        # answ = list(torch.cat(answ, dim=0))
+        # accs = list(torch.cat(accs, dim=0))
+        # idxs = list(torch.cat(idxs, dim=0))
+        return ans_dict, cap_dict, pred_dict
         # return answ, idxs
 
 
@@ -212,6 +257,15 @@ def main():
 
 
     r = run(net, test_loader, tracker, criterion, cap_vcb, hash_vcb, train=False, prefix='test', epoch=0)
+    with open('output/hashtags.csv', 'w') as f:
+        for key in r[0].keys():
+            f.write("%s,%s\n"%(key,r[0][key]))
+    with open('output/captions.csv', 'w') as f:
+        for key in r[1].keys():
+            f.write("%s,%s\n"%(key,r[1][key]))
+    with open('output/predictions.csv', 'w') as f:
+        for key in r[2].keys():
+            f.write("%s,%s\n"%(key,r[2][key]))
     # r = run(net, val_loader, optimizer, tracker, criterion, train=False, prefix='val', epoch=i)
     # print(train_loader.dataset.token_to_index)
     # results = {

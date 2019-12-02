@@ -46,7 +46,7 @@ def get_loader(image_path, train=False, val=False, test=False):
         utils.path_for(train=train, val=val, test=test, answer=True),
         image_path,
         answerable_only = train,
-        transform = utils.get_transform(config.image_size, config.central_fraction)
+        transform = utils.get_transform(config.image_size, test, config.central_fraction)
     )
     if test:
         loader = torch.utils.data.DataLoader(

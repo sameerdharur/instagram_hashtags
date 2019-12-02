@@ -128,13 +128,23 @@ class Tracker:
                 self.value = m * self.value + (1 - m) * value
 
 
-def get_transform(target_size, central_fraction=1.0):
-    return transforms.Compose([
-        transforms.Resize(500),
-        # transforms.RandomResizedCrop(target_size),
-        transforms.RandomCrop(target_size),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225]),
-    ])
+def get_transform(target_size, test = False, central_fraction=1.0):
+    if not test:
+        return transforms.Compose([
+            transforms.Resize(500),
+            # transforms.RandomResizedCrop(target_size),
+            transforms.RandomCrop(target_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])  
+    else:
+        return transforms.Compose([
+            transforms.Resize(500),
+            # transforms.RandomResizedCrop(target_size),
+            transforms.CenterCrop(target_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])  

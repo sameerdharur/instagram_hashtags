@@ -65,7 +65,7 @@ def decode_captions(captions, idx_to_word):
         for t in range(T):
             word = idx_to_word[captions[i, t].item()]
             # print(word)
-            if word != '<pad>':
+            if word != '<pad>' and word!= '<sos>':
                 words.append(word)
             if word == '<eos>':
                 break
@@ -128,7 +128,9 @@ def run(net, loader, optimizer, tracker, criterion, lr_scheduler, cap_vcb, hash_
         # print(a[1:].view(-1).shape)
         # sdsd
         output = out[1:].view(-1, output_dim)
+        # print(a[1:])
         trg = a[1:].reshape(-1)
+        # print(trg)
         _, predictions = out.topk(1,2,True,True)
         inv_hash_dict = {v: k for k, v in hash_vcb.items()}
         inv_cap_dict = {v: k for k, v in cap_vcb.items()}
