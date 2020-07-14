@@ -1,4 +1,8 @@
-# Strong baseline for visual question answering
+# Instagram hashtag sequence generation.
+
+This is the code for the project on generating hashtags from Instagram posts conditioned on an image and a caption. 
+
+The code has been adapted from the repo (https://github.com/Cyanogenoid/pytorch-vqa) whose setup instructions follow :
 
 This is a re-implementation of Vahid Kazemi and Ali Elqursh's paper [Show, Ask, Attend, and Answer: A Strong Baseline For Visual Question Answering][0] in [PyTorch][1].
 
